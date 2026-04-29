@@ -1116,6 +1116,16 @@ namespace TweaksAndFixes
             return null;
         }
 
+        internal static bool Prefix(Part __instance, ref string denyReason, ref bool __result)
+        {
+            if (!GGShipgenTBGunClamp.ShouldBlockEarlyTbGunPlacement(__instance))
+                return true;
+
+            denyReason = "gg_tb_gun_inches";
+            __result = false;
+            return false;
+        }
+
         internal static void Postfix(Part __instance, string denyReason, bool __result)
         {
             Patch_Ship.TraceShipgenCanPlace(__instance, __result, denyReason);

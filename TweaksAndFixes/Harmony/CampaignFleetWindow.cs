@@ -28,6 +28,7 @@ namespace TweaksAndFixes.Harmony
         private static Vector2? _DesignHeaderOffsetMaxOriginal = null;
         private static bool _RefreshingDesignViewerList = false;
         private static bool _SuppressSortedPlayerDesignRefresh = false;
+        internal static Ship? SelectedViewedDesign = null;
         private const float DesignViewerToolbarStripHeight = 24f;
         private const float DesignViewerToolbarTopGapMargin = 4f;
         private const float DesignViewerToolbarFallbackTopOffset = 42f;
@@ -35,6 +36,7 @@ namespace TweaksAndFixes.Harmony
         private static readonly MethodInfo? _RefreshAllShipsUi = AccessTools.Method(typeof(CampaignFleetWindow), "RefreshAllShipsUi");
         private static readonly MethodInfo? _SetDesignImageAndInfoForFirstShip = AccessTools.Method(typeof(CampaignFleetWindow), "SetDesignImageAndInfoForFirstShip");
         private static readonly MethodInfo? _SetShipInfoAndImage = AccessTools.Method(typeof(CampaignFleetWindow), "SetShipInfoAndImage");
+        private static readonly MethodInfo? _GetRefitShipFleet = AccessTools.Method(typeof(CampaignFleetWindow), "GetRefitShipFleet");
 
         private static bool IsViewingForeignDesigns => _DesignViewerPlayer != null && _DesignViewerPlayer != ExtraGameData.MainPlayer();
 
@@ -66,6 +68,7 @@ namespace TweaksAndFixes.Harmony
                 _DesignViewerButton.SetActive(false);
             if (_DesignViewerToolbar != null)
                 _DesignViewerToolbar.SetActive(false);
+            SelectedViewedDesign = null;
             RestoreDesignViewerContentLayout(G.ui?.FleetWindow);
         }
 
@@ -579,6 +582,15 @@ namespace TweaksAndFixes.Harmony
             ui.ShipCount.text = $"{counts.Active}/{counts.Building}/{counts.Other}";
         }
 
+        private static void SetDeletedDesignRowText(FleetWindow_ShipElementUI ui, Ship design)
+        {
+            if (ui?.Name == null || design == null)
+                return;
+
+            string name = design.Name(false, false, false, false, true);
+            ui.Name.text = design.isErased ? $"(deleted) {name}" : name;
+        }
+
         private static void AddShipStateToCounts(Ship ship, ref DesignShipCounts counts)
         {
             if (ship.isBuilding || ship.isCommissioning)
@@ -657,10 +669,15 @@ namespace TweaksAndFixes.Harmony
             List<Ship> sortedDesigns = new();
             void AddDesignCandidate(Ship ship, bool requireShips)
             {
+                // Patch intent: vanilla DeleteDesign marks designs as Erased, but the
+                // backing player.designs list can still contain them. Keep an erased
+                // design only while ships still reference it, so the player can see
+                // obsolete active classes but truly dead designs disappear.
                 if (ship == null || (!ship.isDesign && !ship.isRefitDesign) || sortedDesigns.Contains(ship))
                     return;
 
-                if (requireShips && GetDesignShipCounts(player, ship).Total == 0)
+                DesignShipCounts counts = GetDesignShipCounts(player, ship);
+                if ((ship.isErased || requireShips) && counts.Total == 0)
                     return;
 
                 sortedDesigns.Add(ship);
@@ -776,10 +793,70 @@ namespace TweaksAndFixes.Harmony
 
             DesignShipCounts counts = GetDesignShipCounts(player, ship);
             if (window.Delete != null)
-                window.Delete.interactable = counts.Total == 0;
+                window.Delete.interactable = !ship.isErased && counts.Total == 0;
 
             if (window.BuildShip != null)
-                window.BuildShip.interactable = ship.isDesign || ship.isRefitDesign;
+                window.BuildShip.interactable = !ship.isErased && (ship.isDesign || ship.isRefitDesign);
+
+            if (window.DesignRefit != null && ship.isErased)
+                window.DesignRefit.interactable = false;
+        }
+
+        private static string DesignDeleteDebugName(Ship ship)
+        {
+            if (ship == null)
+                return "null";
+
+            string player = ship.player?.data?.name ?? "?";
+            string type = ship.shipType?.name ?? "?";
+            string name = ship.Name(false, false, false, false, true);
+            return $"{type} {name}, player={player}, erased={ship.isErased}, refit={ship.isRefitDesign}";
+        }
+
+        private static Ship? GetSelectedViewedDesign(CampaignFleetWindow window)
+        {
+            if (SelectedViewedDesign != null)
+                return SelectedViewedDesign;
+
+            if (window?.selectedElements != null && window.selectedElements.Count > 0)
+            {
+                Ship selected = window.selectedElements[0]?.CurrentShip;
+                if (selected != null)
+                    return selected;
+            }
+
+            return null;
+        }
+
+        private static void InstallDesignDeleteButtonHandler(CampaignFleetWindow window, bool allowActions, Ship capturedTarget = null)
+        {
+            if (window?.Delete == null || !allowActions)
+                return;
+
+            window.Delete.onClick.RemoveAllListeners();
+            window.Delete.onClick.AddListener(new System.Action(() =>
+            {
+                // Patch intent: deleting designs from the rebuilt/sorted list is safe
+                // only if the button acts on the row the player clicked. Capture that
+                // row at selection time instead of asking vanilla selectedElements
+                // again after the UI has had a chance to drift.
+                Ship target = capturedTarget ?? GetSelectedViewedDesign(window);
+                Player player = GetCurrentDesignViewerPlayer();
+                DesignShipCounts counts = GetDesignShipCounts(player, target);
+                Melon<TweaksAndFixes>.Logger.Msg($"Design delete clicked: target={DesignDeleteDebugName(target)}, ships={counts.Total} ({counts.Active}/{counts.Building}/{counts.Other}), selectedElements={window.selectedElements?.Count ?? -1}");
+                if (target == null || target.isErased || counts.Total > 0)
+                {
+                    Melon<TweaksAndFixes>.Logger.Msg("Design delete blocked before direct delete.");
+                    return;
+                }
+
+                Melon<TweaksAndFixes>.Logger.Msg($"Design delete direct: target={DesignDeleteDebugName(target)}");
+                if (CampaignController.Instance != null)
+                {
+                    CampaignController.Instance.DeleteDesign(target);
+                    window.Refresh(true);
+                }
+            }));
         }
 
         private static void ClearCurrentDesignList(CampaignFleetWindow window)
@@ -787,6 +864,7 @@ namespace TweaksAndFixes.Harmony
             if (window == null)
                 return;
 
+            SelectedViewedDesign = null;
             foreach (var element in window.designUiByShip)
             {
                 if (element.Value != null)
@@ -818,6 +896,8 @@ namespace TweaksAndFixes.Harmony
                 else
                     SetForeignDesignButtonsInteractable(window, false);
 
+                RebuildDesignRefitButton(window, allowActions);
+                InstallDesignDeleteButtonHandler(window, allowActions);
                 UpdateDesignViewerToolbar(window);
             }
             catch (Exception ex)
@@ -859,6 +939,11 @@ namespace TweaksAndFixes.Harmony
                 if (ship == null || ui?.Btn == null)
                     continue;
 
+                // Patch intent: the vanilla design buttons operate on
+                // FleetWindow_ShipElementUI.CurrentShip. Our rebuilt/sorted
+                // design list must keep that field aligned with the row key,
+                // or actions like Delete can target the first stale design.
+                ui.CurrentShip = ship;
                 System.Action selectAction = new(() => SelectViewedDesign(window, designs, ship, ui, allowActions));
                 ui.Btn.onClick.AddListener(selectAction);
 
@@ -884,6 +969,9 @@ namespace TweaksAndFixes.Harmony
             if (window == null || ship == null || ui == null)
                 return;
 
+            SelectedViewedDesign = ship;
+            Melon<TweaksAndFixes>.Logger.Msg($"Design row selected: target={DesignDeleteDebugName(ship)}");
+            ui.CurrentShip = ship;
             window.selectedElements.Clear();
             window.selectedElements.Add(ui);
 
@@ -895,7 +983,75 @@ namespace TweaksAndFixes.Harmony
 
             _SetShipInfoAndImage?.Invoke(window, new object[] { ship });
             _SetDesignImageAndInfoForFirstShip?.Invoke(window, new object[] { designs, ship, true });
+            // Patch intent: the vanilla design info refresh can rewrite
+            // selectedElements back to its preferred row. Re-assert the
+            // clicked row so Delete/Refit/Build operate on the visible
+            // selection instead of the first stale design in the list.
+            SelectedViewedDesign = ship;
+            ui.CurrentShip = ship;
+            window.selectedElements.Clear();
+            window.selectedElements.Add(ui);
             UpdateDesignSelectionActions(window, GetCurrentDesignViewerPlayer(), ship, allowActions);
+            RebuildDesignRefitButton(window, allowActions);
+            InstallDesignDeleteButtonHandler(window, allowActions, ship);
+        }
+
+        private static void RebuildDesignRefitButton(CampaignFleetWindow window, bool allowActions)
+        {
+            if (window?.DesignRefit == null)
+                return;
+
+            window.DesignRefit.onClick.RemoveAllListeners();
+            if (!allowActions || window.selectedElements == null || window.selectedElements.Count == 0)
+            {
+                window.DesignRefit.interactable = false;
+                return;
+            }
+
+            Ship selectedDesign = window.selectedElements[0]?.CurrentShip;
+            if (selectedDesign == null || selectedDesign.isErased || !selectedDesign.isRefitDesign || _GetRefitShipFleet == null)
+            {
+                window.DesignRefit.interactable = false;
+                return;
+            }
+
+            try
+            {
+                // Patch intent: our sorted design refresh replaces vanilla's row list after Refresh().
+                // Recompute the refit candidates here and pass them directly to the selector,
+                // avoiding private field names that differ between game builds.
+                object[] args = new object[] { 0 };
+                var refitFleet = _GetRefitShipFleet.Invoke(window, args) as Il2CppSystem.Collections.Generic.Dictionary<Ship, FleetWindow_ShipElementUI>;
+
+                bool hasCandidates = refitFleet != null && refitFleet.Count > 0;
+                window.DesignRefit.interactable = hasCandidates;
+                if (!hasCandidates)
+                    return;
+
+                window.DesignRefit.onClick.AddListener(new System.Action(() =>
+                {
+                    if (window.selectShipsRefit == null || window.selectedElements == null || window.selectedElements.Count == 0)
+                        return;
+
+                    Ship refitDesign = window.selectedElements[0]?.CurrentShip;
+                    if (refitDesign == null || !refitDesign.isRefitDesign)
+                        return;
+
+                    window.selectShipsRefit.Show(new System.Action<Il2CppSystem.Collections.Generic.List<Ship>>((selection) =>
+                    {
+                        if (PlayerController.Instance == null || selection == null)
+                            return;
+
+                        PlayerController.Instance.RefitShipsStart(selection, refitDesign, true);
+                        GameManager.Instance?.ChangeStateUI((GameManager.UIState)3, true);
+                    }), refitFleet, refitDesign);
+                }));
+            }
+            catch (Exception ex)
+            {
+                window.DesignRefit.interactable = false;
+                Melon<TweaksAndFixes>.Logger.Warning($"Design refit button rebuild failed. {ex.GetType().Name}: {ex.Message}");
+            }
         }
 
         // [HarmonyPatch(nameof(CampaignFleetWindow.Refresh))]
@@ -976,12 +1132,14 @@ namespace TweaksAndFixes.Harmony
             foreach (var element in __instance.designUiByShip)
             {
                 FleetWindow_ShipElementUI ui = element.Value;
-                Ship s = ui?.CurrentShip ?? element.Key;
+                Ship s = element.Key ?? ui?.CurrentShip;
                 if (ui == null || s == null)
                     continue;
 
+                ui.CurrentShip = s;
                 Player designPlayer = GetCurrentDesignViewerPlayer();
                 SetDesignShipCountText(ui, designPlayer, s);
+                SetDeletedDesignRowText(ui, s);
 
                 if (s.isRefitDesign)
                 {
@@ -998,9 +1156,11 @@ namespace TweaksAndFixes.Harmony
                 {
                     DesignShipCounts counts = GetDesignShipCounts(designPlayer, s);
                     if (__instance.Delete != null)
-                        __instance.Delete.interactable = !IsViewingForeignDesigns && counts.Total == 0;
+                        __instance.Delete.interactable = !IsViewingForeignDesigns && !s.isErased && counts.Total == 0;
                     if (__instance.BuildShip != null && !IsViewingForeignDesigns)
-                        __instance.BuildShip.interactable = s.isDesign || s.isRefitDesign;
+                        __instance.BuildShip.interactable = !s.isErased && (s.isDesign || s.isRefitDesign);
+                    if (__instance.DesignRefit != null && s.isErased)
+                        __instance.DesignRefit.interactable = false;
                 }
             }
 
@@ -1168,6 +1328,30 @@ namespace TweaksAndFixes.Harmony
                 catch
                 {
                 }
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(CampaignController))]
+    internal class Patch_CampaignControllerDesignViewerDelete
+    {
+        [HarmonyPatch(nameof(CampaignController.DeleteDesign))]
+        [HarmonyPrefix]
+        internal static void Prefix_DeleteDesign(ref Ship ship)
+        {
+            Ship selected = Patch_CampaignFleetWindow.SelectedViewedDesign;
+            CampaignFleetWindow window = G.ui?.FleetWindow;
+            if (selected == null || window == null || ship == selected)
+                return;
+
+            // Patch intent: when the rebuilt design list is active, vanilla's
+            // delete-confirm callback can still carry the first design from the
+            // original list. Trust the row the player actually selected.
+            if (window.selectedElements != null &&
+                window.selectedElements.Count > 0 &&
+                window.selectedElements[0]?.CurrentShip == selected)
+            {
+                ship = selected;
             }
         }
     }
