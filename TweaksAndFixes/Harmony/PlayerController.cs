@@ -1,5 +1,6 @@
 using HarmonyLib;
 using Il2Cpp;
+using MelonLoader;
 using System.Reflection;
 
 namespace TweaksAndFixes
@@ -9,9 +10,20 @@ namespace TweaksAndFixes
     {
         [HarmonyPatch(nameof(PlayerController.CloneShipRaw))]
         [HarmonyPostfix]
-        internal static void Postfix_CloneShipRaw(Ship from, ref Ship __result)
+        internal static void Postfix_CloneShipRaw(Ship from, bool willBeDesign, ref Ship __result)
         {
-            __result.TAFData().OnClonePost(from.TAFData());
+            if (from != null && __result != null)
+                __result.TAFData().OnClonePost(from.TAFData());
+
+            // Patch intent: refits created from an erased base design can inherit
+            // the Erased status through CloneShipRaw's store roundtrip. New design
+            // clones should be live designs, otherwise the design list immediately
+            // hides them as deleted designs with zero ships.
+            if (willBeDesign && from != null && __result != null && from.isErased && __result.isErased)
+            {
+                __result.SetStatus(VesselEntity.Status.Normal);
+                Melon<TweaksAndFixes>.Logger.Msg($"Design clone status normalized from erased source: {from.Name(false, false, false, false, true)} -> {__result.Name(false, false, false, false, true)}");
+            }
         }
     }
 

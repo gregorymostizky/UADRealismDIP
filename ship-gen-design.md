@@ -524,7 +524,8 @@ Current patch tracker:
 | Data-driven armor generation | all armored ship types with `GenArmorData` | `Ship.GenerateArmor(...)` during vanilla shipgen | Active, hardcoded |
 | Post-parts turret armor sync | generated guns with turret armor entries | `GenerateRandomShip` state `11` (`validate_guns`) | Active, hardcoded |
 | Whole-inch gun caliber floor | generated guns | `Ship.SetCaliberDiameter(...)` during vanilla shipgen | Active, hardcoded |
-| Penetration-biased gun components | generated gun-equipped ships | `GenerateRandomShip.MoveNext` while vanilla shipgen is active | Active, hardcoded |
+| Best generated components | generated ships | `GenerateRandomShip.MoveNext` while vanilla shipgen is active | Active, hardcoded |
+| Early TB main-battery clamp | pre-TB2 `tb_lowbow`/`tb_standard`/`tb_highbow` on `jap_tb_hull` | `Part.CanPlace(out string)` | Active, hardcoded |
 | Hull-aware speed clamp | all generated ship types | `Ship.SetSpeedMax(...)` during vanilla shipgen | Active, hardcoded |
 | Relaxed minimum speed floor | `tb`, `dd`, `cl` by `-2 kn`; all others by `-1 kn` | `Ship.SetSpeedMax(...)` during vanilla shipgen | Active, hardcoded |
 | Whole-knot speed normalization | all generated ship types | `Ship.SetSpeedMax(...)` during vanilla shipgen | Active, hardcoded |
@@ -575,17 +576,29 @@ Current standalone tweaks:
   - Prefix-patches `Ship.SetCaliberDiameter(...)` only while the vanilla-baseline generator is active, and also normalizes any surviving generated gun caliber entries after each `GenerateRandomShip.MoveNext` step.
   - Does not currently clamp barrel length modifiers; that is deliberately left alone until we map a safer generation-only hook.
 
-- Penetration-biased generated gun components.
+- Generated component choices.
   - Hardcoded for now; no config param.
-  - Lives in `TweaksAndFixes/Harmony/GGShipgenGuns.cs` next to the caliber-floor patch.
-  - While vanilla-baseline shipgen is active, generated ships install the most AP-heavy main and secondary shell ratios when available: `shell_ratio_main_2` and `shell_ratio_sec_2`.
+  - Lives in `TweaksAndFixes/Harmony/GGShipgenComponents.cs` to keep component policy separate from gun caliber, armor thickness, speed, and logging.
+  - While vanilla-baseline shipgen is active, generated ships install the best researched armor quality when available: `armor_10` down through `armor_0`.
+  - Generated ships install the most AP-heavy main and secondary shell ratios when available: `shell_ratio_main_2` and `shell_ratio_sec_2`.
   - Generated ships also prefer the highest-penetration shell setup available from current tech: `shell_S.heavy` before `shell_heavy` before `shell_normal`, AP cap order `ap_5`, `ap_2`, `ap_1`, `ap_0`, `ap_4`, `ap_3`, and HE cap order `he_3`, `he_2`, `he_0`, `he_1`, `he_4`, `he_5`.
   - This preserves vanilla part selection and only changes the final component choices for generated designs.
+
+- Early TB gun-battery clamp.
+  - Hardcoded for now; no config param.
+  - Lives in `TweaksAndFixes/Harmony/GGShipgenTBGunClamp.cs` so this tiny-hull experiment is separate from the general gun component/caliber patch.
+  - Prefixes the existing `Part.CanPlace(out string)` hook. This is intentionally a placement rejection, not a post-placement deletion.
+  - Applies only in vanilla-baseline shipgen, only to ship type `tb`, and only to `tb_lowbow`, `tb_standard`, `tb_highbow`, or model `jap_tb_hull`.
+  - Blocks only a gun placement that would push total gun barrel-inches above `14` before the 500t TB tech (`hull_destroyer_2`) or above `18` once that tech is researched. The cap stops applying once the 700t TB tech (`hull_destroyer_3`) is researched.
+  - The total is calculated as `sum(gun caliber inches * barrels)` across main and secondary guns.
+  - This uses vanilla's normal `CanPlace=false` path so the generator can keep searching for a lighter battery instead of carrying an overweight layout into validation.
 
 - Compact vanilla-baseline shipgen logging.
   - Hardcoded for now; no config param.
   - The per-attempt `GG turret armor sync` diagnostics were removed from normal logs because they were too noisy during retries.
-  - `TweaksAndFixes/Harmony/GGShipgenGuns.cs` now logs one `GG shipgen start` line when vanilla-baseline `GenerateRandomShip` begins and one `GG shipgen end` line when the coroutine completes.
+  - Lives in `TweaksAndFixes/Harmony/GGShipgenLogging.cs` so logging does not clutter gun/component patch files.
+  - The shared `GenerateRandomShip.MoveNext` lifecycle hook lives in `TweaksAndFixes/Harmony/GGShipgenLifecycle.cs` and calls the small GG modules: component policy, gun caliber normalization, and logging.
+  - `GGShipgenLogging` writes one `GG shipgen start` line when vanilla-baseline `GenerateRandomShip` begins and one `GG shipgen end` line when the coroutine completes.
   - Start includes ship type, hull id/model, country, year, and target tonnage.
   - Each rejected attempt logs a compact best-effort reason when vanilla increments the attempt counter. Current reason hints include main gun count, unmet required stats, overweight, invalid/empty barbettes, tech tonnage, balance, or general validity failure.
   - End includes success/failure, attempts, elapsed seconds, speed, weight/tonnage, compact armor summary, compact main/secondary gun summary, compact torpedo summary, and the final rejection reason on failure.
@@ -717,6 +730,12 @@ Cleanup note: the optional AI design service experiment was removed. Campaign AI
 ### Hull Defaults And Tonnage
 
 Current `ShouldUseMaxShipgenDisplacement` and `ShouldUseShipgenGeometryDefaults` both return true whenever `Config.ShipGenTweaks` is enabled and the ship/hull exists.
+
+Tonnage tech experiment note:
+
+- We tried a code-only runtime patch that raised loaded `hull_destroyer_*` TB/DD `tonnage(...)` effects by `+100` and also raised pre-tech `tb`/`dd` `ShipType.tonnageStartingLimit` by `+100`.
+- It proved the early TB cap path: before `hull_destroyer_1` is researched, vanilla falls back to `ShipType.tonnageStartingLimit` (`tb` was 275t in active data).
+- The experiment was reverted because it did not meaningfully solve the cursed early TB hull failures; those failures appear to be more about part/recipe/weight pressure than only legal tonnage.
 
 `ForceMaxShipgenDisplacement`:
 
