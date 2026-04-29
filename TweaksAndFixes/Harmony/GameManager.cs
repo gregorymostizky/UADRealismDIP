@@ -238,9 +238,6 @@ namespace TweaksAndFixes
     [HarmonyPatch(typeof(GameManager._LoadCampaign_d__98))]
     internal class Patch_GameManager_LoadCampaigndCoroutine
     {
-        // public static Stopwatch watch = new();
-        // public static int lastState = 0;
-
         // This method calls CampaignController.PrepareProvinces *before* CampaignMap.PreInit
         // So we patch here and skip the preinit patch.
         [HarmonyPatch(nameof(GameManager._LoadCampaign_d__98.MoveNext))]
@@ -248,14 +245,6 @@ namespace TweaksAndFixes
         internal static void Prefix_MoveNext(GameManager._LoadCampaign_d__98 __instance)
         {
             // TODO: Patch state 17 (G.ui.PrepareShipAllTex(ship))
-            // watch.Start();
-            // 
-            // if (__instance.__1__state != lastState)
-            // {
-            //     Melon<TweaksAndFixes>.Logger.Msg($"{__instance.__1__state} -> {lastState} : {watch.ElapsedMilliseconds}");
-            //     watch.Restart();
-            //     lastState = __instance.__1__state;
-            // }
 
             // Skip generating previews. They don't generate right anyway...
             if (__instance.__1__state == 17)
@@ -362,12 +351,5 @@ namespace TweaksAndFixes
                 Patch_CampaignMap._SkipNextMapPatch = true;
             }
         }
-
-        // [HarmonyPatch(nameof(GameManager._LoadCampaign_d__98.MoveNext))]
-        // [HarmonyPostfix]
-        // internal static void Postfix_MoveNext(GameManager._LoadCampaign_d__98 __instance)
-        // {
-        //     watch.Stop();
-        // }
     }
 }

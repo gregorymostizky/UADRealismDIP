@@ -2,6 +2,7 @@
 using HarmonyLib;
 using Il2Cpp;
 using Il2CppSystem.Linq;
+using UnityEngine;
 using static Il2Cpp.CampaignController;
 
 #pragma warning disable CS8602
@@ -378,11 +379,205 @@ namespace TweaksAndFixes
         }
 
         internal static CampaignController._AiManageFleet_d__201? _AiManageFleet = null;
+        private static int _SkippedPrewarmBuildNewShipsCount = 0;
+        private static int _SkippedPrestartRandomDesignsCount = 0;
+
+        internal struct AiBuildTrace
+        {
+            public bool Enabled;
+            public string PlayerName;
+            public int Year;
+            public int Month;
+            public bool Prewarming;
+            public float Cash;
+            public float TempCash;
+            public float Capacity;
+            public int Designs;
+            public int Building;
+            public int Active;
+            public int Other;
+            public float BuildingTonnage;
+            public float SmallestDesignTonnage;
+            public float LargestDesignTonnage;
+            public string DesignClasses;
+            public string BuildingClasses;
+            public HashSet<Il2CppSystem.Guid> DesignIds;
+            public HashSet<Il2CppSystem.Guid> BuildingIds;
+        }
+
+        private static bool IsAiBuildDebugEnabled()
+            => Config.Param("taf_debug_ai_shipbuilding", 0) != 0;
+
+        private static AiBuildTrace CaptureAiBuildTrace(CampaignController controller, Player player, float tempPlayerCash)
+        {
+            AiBuildTrace trace = new()
+            {
+                Enabled = IsAiBuildDebugEnabled() && player != null && player.isAi,
+                PlayerName = player == null ? "?" : player.Name(false),
+                Year = controller?.CurrentDate.AsDate().Year ?? 0,
+                Month = controller?.CurrentDate.AsDate().Month ?? 0,
+                Prewarming = _AiManageFleet != null && _AiManageFleet.prewarming,
+                TempCash = tempPlayerCash,
+                DesignIds = new HashSet<Il2CppSystem.Guid>(),
+                BuildingIds = new HashSet<Il2CppSystem.Guid>(),
+                DesignClasses = string.Empty,
+                BuildingClasses = string.Empty
+            };
+
+            if (!trace.Enabled)
+                return trace;
+
+            try { trace.Cash = player.cash; } catch { trace.Cash = 0f; }
+            try { trace.Capacity = player.ShipbuildingCapacityLimit(); } catch { trace.Capacity = 0f; }
+
+            Dictionary<string, int> designClasses = new();
+            foreach (Ship design in new Il2CppSystem.Collections.Generic.List<Ship>(player.designs))
+            {
+                if (design == null || !design.isDesign)
+                    continue;
+
+                trace.Designs++;
+                trace.DesignIds.Add(design.id);
+                AddClassCount(designClasses, design);
+                float tonnage = SafeTonnage(design);
+                if (tonnage > 0f)
+                {
+                    trace.SmallestDesignTonnage = trace.SmallestDesignTonnage <= 0f ? tonnage : Math.Min(trace.SmallestDesignTonnage, tonnage);
+                    trace.LargestDesignTonnage = Math.Max(trace.LargestDesignTonnage, tonnage);
+                }
+            }
+
+            Dictionary<string, int> buildingClasses = new();
+            foreach (Ship ship in player.GetFleetAll())
+            {
+                if (ship == null || ship.isDesign || ship.isScrapped || ship.isSunk)
+                    continue;
+
+                if (ship.isBuilding || ship.isCommissioning)
+                {
+                    trace.Building++;
+                    trace.BuildingIds.Add(ship.id);
+                    AddClassCount(buildingClasses, ship.design ?? ship);
+                    trace.BuildingTonnage += SafeTonnage(ship.design ?? ship);
+                }
+                else if (ship.isAlive && !ship.isRepairing && !ship.isRefit)
+                    trace.Active++;
+                else
+                    trace.Other++;
+            }
+
+            trace.DesignClasses = FormatClassCounts(designClasses);
+            trace.BuildingClasses = FormatClassCounts(buildingClasses);
+            return trace;
+        }
+
+        private static void AddClassCount(Dictionary<string, int> counts, Ship ship)
+        {
+            string cls = ship?.shipType?.name?.ToUpperInvariant() ?? "?";
+            counts[cls] = counts.TryGetValue(cls, out int count) ? count + 1 : 1;
+        }
+
+        private static float SafeTonnage(Ship ship)
+        {
+            if (ship == null)
+                return 0f;
+
+            try { return ship.Tonnage(); }
+            catch { return 0f; }
+        }
+
+        private static string FormatClassCounts(Dictionary<string, int> counts)
+        {
+            if (counts.Count == 0)
+                return "-";
+
+            return string.Join(", ", counts.OrderBy(kvp => ShipTypeSortRank(kvp.Key)).ThenBy(kvp => kvp.Key).Select(kvp => $"{kvp.Key}:{kvp.Value}"));
+        }
+
+        private static int ShipTypeSortRank(string cls)
+        {
+            return cls.ToLowerInvariant() switch
+            {
+                "bb" => 0,
+                "bc" => 1,
+                "ca" => 2,
+                "cl" => 3,
+                "dd" => 4,
+                "tb" => 5,
+                "ss" => 6,
+                "tr" => 7,
+                _ => 100
+            };
+        }
+
+        private static void LogAiBuildTrace(CampaignController controller, Player player, float tempPlayerCash, AiBuildTrace before, bool skipped)
+        {
+            if (!before.Enabled)
+                return;
+
+            AiBuildTrace after = CaptureAiBuildTrace(controller, player, tempPlayerCash);
+            int newDesigns = Math.Max(0, after.Designs - before.Designs);
+            int newBuilding = Math.Max(0, after.Building - before.Building);
+            List<string> newDesignNames = new();
+            List<string> newBuildNames = new();
+
+            foreach (Ship design in new Il2CppSystem.Collections.Generic.List<Ship>(player.designs))
+            {
+                if (design == null || !design.isDesign || before.DesignIds.Contains(design.id))
+                    continue;
+
+                newDesignNames.Add(DescribeAiBuildShip(design));
+            }
+
+            foreach (Ship ship in player.GetFleetAll())
+            {
+                if (ship == null || ship.isDesign || before.BuildingIds.Contains(ship.id))
+                    continue;
+                if (!ship.isBuilding && !ship.isCommissioning)
+                    continue;
+
+                newBuildNames.Add(DescribeAiBuildShip(ship));
+            }
+
+            string outcome = skipped ? "skipped" : (newDesigns == 0 && newBuilding == 0 ? "no new orders" : "changed");
+            Melon<TweaksAndFixes>.Logger.Msg($"AI shipbuilding {outcome}: {before.PlayerName}, date={before.Year:D4}-{before.Month:D2}, prewarm={before.Prewarming}, cash={before.Cash:N0}, tempCash={before.TempCash:N0}, capacity={before.Capacity:N0}");
+            Melon<TweaksAndFixes>.Logger.Msg($"  Before: designs={before.Designs} [{before.DesignClasses}], building={before.Building} [{before.BuildingClasses}], active={before.Active}, other={before.Other}");
+            Melon<TweaksAndFixes>.Logger.Msg($"  After : designs={after.Designs} [{after.DesignClasses}], building={after.Building} [{after.BuildingClasses}], active={after.Active}, other={after.Other}");
+
+            if (newDesignNames.Count > 0)
+                Melon<TweaksAndFixes>.Logger.Msg($"  New designs: {string.Join("; ", newDesignNames)}");
+            if (newBuildNames.Count > 0)
+                Melon<TweaksAndFixes>.Logger.Msg($"  New builds : {string.Join("; ", newBuildNames)}");
+            if (!skipped && newDesignNames.Count == 0 && newBuildNames.Count == 0)
+            {
+                float freeCapacityBefore = before.Capacity > 0f ? before.Capacity - before.BuildingTonnage : 0f;
+                string designTonnage = before.Designs > 0 ? $"{before.SmallestDesignTonnage:N0}-{before.LargestDesignTonnage:N0}t" : "-";
+                string inferred = before.Designs == 0
+                    ? "no player.designs entries available to build from"
+                    : before.Building > 0
+                        ? "already has ships under construction; vanilla AI may be satisfied or budget/capacity gated"
+                        : "has designs and no current builds; deeper CreateRandom/shared-design/budget traces should explain the drop";
+                Melon<TweaksAndFixes>.Logger.Msg($"  No-build context: buildingTonnage={before.BuildingTonnage:N0}t, freeCapacityApprox={freeCapacityBefore:N0}t, designTonnageRange={designTonnage}, inferred={inferred}");
+                Melon<TweaksAndFixes>.Logger.Msg("  No visible change from BuildNewShips; next checks are budget/capacity gates, available designs by class, and shipgen/shared-design failure logs.");
+            }
+        }
+
+        private static string DescribeAiBuildShip(Ship ship)
+        {
+            string cls = ship?.shipType?.name?.ToUpperInvariant() ?? "?";
+            string name = ship?.Name(false, false, false, false, true) ?? "?";
+            int year = ship == null ? 0 : (ship.isRefitDesign ? ship.dateCreatedRefit : ship.dateCreated).AsDate().Year;
+            float tons = 0f;
+            try { tons = ship?.Tonnage() ?? 0f; } catch { tons = 0f; }
+            return $"{cls} {name} ({year}, {tons:N0}t)";
+        }
 
         [HarmonyPatch(nameof(CampaignController.Init))]
         [HarmonyPrefix]
-        internal static void Prefix_Init(ref int campaignDesignsUsage)
+        internal static void Prefix_Init(bool createOwnFleet, ref int campaignDesignsUsage)
         {
+            Patch_CampaignNewGame.LogCampaignStartFleetCreation(createOwnFleet);
+
             if (Config.ForceNoPredefsInNewGames)
                 campaignDesignsUsage = 0;
         }
@@ -583,38 +778,53 @@ namespace TweaksAndFixes
             _PassThroughAdjustAttitude = false;
         }
 
-        // [HarmonyPatch(nameof(CampaignController.BuildNewShips))]
-        // [HarmonyPrefix]
-        // internal static bool Prefix_BuildNewShips(CampaignController __instance, Player player, float tempPlayerCash)
-        // {
-        //     var shiplist = new Il2CppSystem.Collections.Generic.List<Ship>(player.fleet);
-        //     
-        //     Melon<TweaksAndFixes>.Logger.Msg($"Pre-Build {player.Name(false)}: {shiplist.Count}");
-        // 
-        //     foreach (var ship in shiplist)
-        //     {
-        //         Melon<TweaksAndFixes>.Logger.Msg($"  {ship.Name(false, false)}");
-        //     }
-        // 
-        //     return true;
-        // }
-        // 
-        // [HarmonyPatch(nameof(CampaignController.BuildNewShips))]
-        // [HarmonyPostfix]
-        // internal static void Postfix_BuildNewShips(CampaignController __instance, Player player, float tempPlayerCash)
-        // {
-        //     CampaignControllerM.HandleScrapping(__instance, player, _AiManageFleet != null && _AiManageFleet.prewarming//);
-        //
-        //     var shiplist = new Il2CppSystem.Collections.Generic.List<Ship>(player.fleet);
-        //     
-        //     Melon<TweaksAndFixes>.Logger.Msg($"Post-Build: {player.Name(false)}: {shiplist.Count}");
-        //     
-        //     foreach (var ship in shiplist)
-        //     {
-        //         Melon<TweaksAndFixes>.Logger.Msg($"  {ship.Name(false, false)}");
-        //     }
-        // }
+        [HarmonyPatch(nameof(CampaignController.BuildNewShips))]
+        [HarmonyPrefix]
+        internal static bool Prefix_BuildNewShips(CampaignController __instance, Player player, float tempPlayerCash, out AiBuildTrace __state)
+        {
+            __state = CaptureAiBuildTrace(__instance, player, tempPlayerCash);
 
+            if (_AiManageFleet == null || !_AiManageFleet.prewarming)
+                return true;
+
+            if (!Patch_Ship.ShouldUseBlankSlateCampaignStart())
+                return true;
+
+            _SkippedPrewarmBuildNewShipsCount++;
+            if (_SkippedPrewarmBuildNewShipsCount <= 12 || _SkippedPrewarmBuildNewShipsCount % 25 == 0)
+            {
+                string playerName = player == null ? "?" : player.Name(false);
+                Melon<TweaksAndFixes>.Logger.Msg($"Skipping prewarm BuildNewShips for {playerName} ({_SkippedPrewarmBuildNewShipsCount} skipped).");
+            }
+
+            LogAiBuildTrace(__instance, player, tempPlayerCash, __state, true);
+            __state.Enabled = false;
+            return false;
+        }
+
+        internal static bool ShouldSkipPrestartRandomDesigns(bool prewarming)
+        {
+            return prewarming && Patch_Ship.ShouldSkipCampaignPrestartCreateRandom();
+        }
+
+        internal static void LogSkippedPrestartRandomDesigns(Player player)
+        {
+            _SkippedPrestartRandomDesignsCount++;
+            if (_SkippedPrestartRandomDesignsCount > 12 && _SkippedPrestartRandomDesignsCount % 25 != 0)
+                return;
+
+            string playerName = player == null ? "?" : player.Name(false);
+            int year = CampaignController.Instance?.CurrentDate.AsDate().Year ?? 0;
+            Melon<TweaksAndFixes>.Logger.Msg($"Skipping pre-start GenerateRandomDesigns for {playerName}, year={year} ({_SkippedPrestartRandomDesignsCount} skipped).");
+        }
+
+        // 
+        [HarmonyPatch(nameof(CampaignController.BuildNewShips))]
+        [HarmonyPostfix]
+        internal static void Postfix_BuildNewShips(CampaignController __instance, Player player, float tempPlayerCash, AiBuildTrace __state)
+        {
+            LogAiBuildTrace(__instance, player, tempPlayerCash, __state, false);
+        }
 
         [HarmonyPatch(nameof(CampaignController.ScrapOldAiShips))]
         [HarmonyPrefix]
@@ -682,6 +892,28 @@ namespace TweaksAndFixes
         internal static void Postfix_MoveNext(CampaignController._AiManageFleet_d__201 __instance)
         {
             Patch_CampaignController._AiManageFleet = null;
+        }
+    }
+
+    [HarmonyPatch(typeof(CampaignController._GenerateRandomDesigns_d__202))]
+    internal class Patch_GenerateRandomDesigns
+    {
+        [HarmonyPatch(nameof(CampaignController._GenerateRandomDesigns_d__202.MoveNext))]
+        [HarmonyPrefix]
+        internal static bool Prefix_MoveNext(CampaignController._GenerateRandomDesigns_d__202 __instance, ref bool __result)
+        {
+            if (__instance.__1__state != 0)
+                return true;
+
+            if (Patch_CampaignController.ShouldSkipPrestartRandomDesigns(__instance.prewarming))
+            {
+                Patch_CampaignController.LogSkippedPrestartRandomDesigns(__instance.player);
+                __instance.__1__state = -2;
+                __result = false;
+                return false;
+            }
+
+            return true;
         }
     }
 }
