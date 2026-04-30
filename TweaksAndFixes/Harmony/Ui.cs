@@ -442,6 +442,7 @@ namespace TweaksAndFixes
             CampaignControllerM.Update();
             ConstructorM.Update();
             CheatMenu.UpdateCheatButtonInteractable();
+            GGAdvancedBattleAIOption.RefreshButton();
 
             if (GameManager.IsWorldMap && GameManager.isScrollMove && !EventSystem.current.IsPointerOverGameObject())
             {

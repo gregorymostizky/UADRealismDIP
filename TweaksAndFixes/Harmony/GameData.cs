@@ -23,6 +23,7 @@ namespace TweaksAndFixes
             }
 
             GameDataM.LoadData(__instance);
+            GGAdvancedBattleAIOption.Start();
             Patch_Ui.UpdateVersionString(G.ui);
         }        
 
