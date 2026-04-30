@@ -3,7 +3,7 @@ using UnityEngine;
 using Il2Cpp;
 
 [assembly: MelonGame("Game Labs", "Ultimate Admiral Dreadnoughts")]
-[assembly: MelonInfo(typeof(TweaksAndFixes.TweaksAndFixes), "TAF-RC7 GG Patch gg212", "3.20.3-gg212", "NathanKell & DukeDagor")]
+[assembly: MelonInfo(typeof(TweaksAndFixes.TweaksAndFixes), "TAF-RC7 GG Patch gg226", "3.20.3-gg226", "NathanKell & DukeDagor")]
 [assembly: MelonColor(255, 220, 220, 0)]
 [assembly: HarmonyDontPatchAll]
 
