@@ -50,6 +50,63 @@ namespace TweaksAndFixes
             }
         }
 
+        private static string HullTechSummary(Ship ship)
+        {
+            if (ship?.player == null || ship.shipType == null)
+                return "hullTech=?";
+
+            string shipType = ship.shipType.name ?? string.Empty;
+            string techName = "?";
+            int techTonnage = 0;
+
+            try
+            {
+                if (ship.player.technologies != null)
+                {
+                    foreach (Technology tech in ship.player.technologies)
+                    {
+                        if (tech?.data?.effects == null || !tech.isResearched)
+                            continue;
+
+                        if (!tech.data.effects.TryGetValue("tonnage", out var entries) || entries == null)
+                            continue;
+
+                        foreach (var entry in entries)
+                        {
+                            if (entry == null || entry.Count < 2)
+                                continue;
+
+                            if (!string.Equals(entry[0], shipType, StringComparison.OrdinalIgnoreCase))
+                                continue;
+
+                            if (!int.TryParse(entry[1], out int tonnage) || tonnage < techTonnage)
+                                continue;
+
+                            techTonnage = tonnage;
+                            techName = tech.data.name ?? "?";
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            float cap = 0f;
+            try
+            {
+                cap = ship.player.TonnageLimit(ship.shipType);
+            }
+            catch
+            {
+            }
+
+            string techCap = cap > 0f ? $"{cap:0}t" : "?";
+            return techTonnage > 0
+                ? $"hullTech={techName}({techTonnage}t), techCap={techCap}"
+                : $"hullTech=?, techCap={techCap}";
+        }
+
         private static string GunSummary(Ship ship)
         {
             if (ship?.parts == null)
@@ -162,13 +219,48 @@ namespace TweaksAndFixes
             static string Inch(Il2CppSystem.Collections.Generic.Dictionary<Ship.A, float> armor, Ship.A area)
                 => $"{armor.ArmorValue(area) / 25.4f:0.#}";
 
+            static string ActualTurretArmor(Ship ship)
+            {
+                if (ship?.shipTurretArmor == null || ship.shipTurretArmor.Count == 0)
+                    return $"{Inch(ship.armor, Ship.A.TurretSide)}/{Inch(ship.armor, Ship.A.TurretTop)}/{Inch(ship.armor, Ship.A.Barbette)}";
+
+                float side = 0f;
+                float top = 0f;
+                float barbette = 0f;
+                int zero = 0;
+
+                foreach (Ship.TurretArmor turretArmor in ship.shipTurretArmor)
+                {
+                    if (turretArmor == null)
+                        continue;
+
+                    side = Mathf.Max(side, turretArmor.sideTurretArmor);
+                    top = Mathf.Max(top, turretArmor.topTurretArmor);
+                    barbette = Mathf.Max(barbette, turretArmor.barbetteArmor);
+
+                    if (turretArmor.sideTurretArmor <= 0f && turretArmor.topTurretArmor <= 0f && turretArmor.barbetteArmor <= 0f)
+                        zero++;
+                }
+
+                string zeroText = zero > 0 ? $", zero={zero}" : string.Empty;
+                return $"max {side / 25.4f:0.#}/{top / 25.4f:0.#}/{barbette / 25.4f:0.#} ({ship.shipTurretArmor.Count} entries{zeroText})";
+            }
+
             string belt = $"{Inch(ship.armor, Ship.A.Belt)}/{Inch(ship.armor, Ship.A.BeltBow)}/{Inch(ship.armor, Ship.A.BeltStern)}";
             string deck = $"{Inch(ship.armor, Ship.A.Deck)}/{Inch(ship.armor, Ship.A.DeckBow)}/{Inch(ship.armor, Ship.A.DeckStern)}";
-            string turret = $"{Inch(ship.armor, Ship.A.TurretSide)}/{Inch(ship.armor, Ship.A.TurretTop)}/{Inch(ship.armor, Ship.A.Barbette)}";
+            // Patch intent: global armor stores template values, but mounted
+            // gun armor lives in ship.shipTurretArmor. Log the actual turret
+            // entries so summaries match what the generated design really has.
+            string turret = ActualTurretArmor(ship);
             string citadel = $"{Inch(ship.armor, Ship.A.InnerBelt_1st)}/{Inch(ship.armor, Ship.A.InnerDeck_1st)}";
             string misc = $"{Inch(ship.armor, Ship.A.ConningTower)}/{Inch(ship.armor, Ship.A.Superstructure)}";
 
             return $"armor=in belt={belt}, deck={deck}, turret={turret}, citadel={citadel}, ct/super={misc}";
+        }
+
+        private static string DesignSummary(Ship ship)
+        {
+            return $"{SpeedSummary(ship)}, weight={ship.Weight():0}t/{ship.Tonnage():0}t, {ArmorSummary(ship)}, {GunSummary(ship)}, {TorpedoSummary(ship)}";
         }
 
         private static string RejectionSummary(Ship ship)
@@ -280,7 +372,7 @@ namespace TweaksAndFixes
 
             float elapsed = _summaryStartedAt > 0f ? Time.realtimeSinceStartup - _summaryStartedAt : 0f;
             Melon<TweaksAndFixes>.Logger.Msg(
-                $"GG shipgen attempt rejected: {ShipLabel(ship)}, attempt={rejectedAttempt}/{routine._triesTotal_5__4}, elapsed={elapsed:0.0}s, reason={RejectionSummary(ship)}");
+                $"GG shipgen attempt rejected: {ShipLabel(ship)}, attempt={rejectedAttempt}/{routine._triesTotal_5__4}, elapsed={elapsed:0.0}s, {HullTechSummary(ship)}, {DesignSummary(ship)}, reason={RejectionSummary(ship)}");
         }
 
         internal static void LogShipgenStart(Ship._GenerateRandomShip_d__573 routine)
@@ -300,7 +392,7 @@ namespace TweaksAndFixes
             // baseline shipgen so logs show what was attempted without enabling
             // the much noisier TAF diagnostic trace.
             Melon<TweaksAndFixes>.Logger.Msg(
-                $"GG shipgen start: {ShipLabel(ship)}, country={PlayerLabel(ship)}, year={ShipYear(ship)}, tonnage={ship.Tonnage():0}t/{ship.TonnageMax():0}t");
+                $"GG shipgen start: {ShipLabel(ship)}, country={PlayerLabel(ship)}, year={ShipYear(ship)}, {HullTechSummary(ship)}, tonnage={ship.Tonnage():0}t/{ship.TonnageMax():0}t");
         }
 
         internal static void LogShipgenEnd(Ship._GenerateRandomShip_d__573 routine)
@@ -315,7 +407,7 @@ namespace TweaksAndFixes
             string rejected = success ? string.Empty : $", reason={RejectionSummary(ship)}";
 
             Melon<TweaksAndFixes>.Logger.Msg(
-                $"GG shipgen end: {ShipLabel(ship)}, result={result}, attempts={routine._tryN_5__5}/{routine._triesTotal_5__4}, elapsed={elapsed:0.0}s, {SpeedSummary(ship)}, weight={ship.Weight():0}t/{ship.Tonnage():0}t, {ArmorSummary(ship)}, {GunSummary(ship)}, {TorpedoSummary(ship)}{rejected}");
+                $"GG shipgen end: {ShipLabel(ship)}, result={result}, attempts={routine._tryN_5__5}/{routine._triesTotal_5__4}, elapsed={elapsed:0.0}s, {HullTechSummary(ship)}, {DesignSummary(ship)}{rejected}");
 
             _summaryShip = null;
             _summaryStartedAt = 0f;

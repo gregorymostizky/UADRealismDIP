@@ -8,11 +8,23 @@ namespace TweaksAndFixes
     internal static class GGShipgenArmor
     {
         private static int _generateRandomShipState = -1;
+        private static bool _loggedAppliedArmor = false;
 
         private static bool IsVanillaBaselineShipgen()
         {
             return Patch_Ship.UseVanillaShipgenBaseline() && _generateRandomShipState >= 0;
         }
+
+        private static string ShipLabel(Ship ship)
+        {
+            string shipType = ship?.shipType?.name ?? "?";
+            string hull = ship?.hull?.data?.name ?? ship?.hull?.name ?? "?";
+            string model = ship?.hull?.data?.model ?? "?";
+            return $"{shipType.ToUpperInvariant()} {hull}/{model}";
+        }
+
+        private static string Inches(Il2CppSystem.Collections.Generic.Dictionary<Ship.A, float> armor, Ship.A area)
+            => $"{armor.ArmorValue(area) / 25.4f:0.#}";
 
         private static Il2CppSystem.Collections.Generic.Dictionary<Ship.A, float>? TryGenerateDataDrivenArmor(float armorMaximal, Ship shipHint)
         {
@@ -76,6 +88,19 @@ namespace TweaksAndFixes
             }
 
             shipHint.armor = oldDict;
+
+            // Patch intent: keep one lightweight confirmation per generated design so
+            // odd armor layouts can be traced to the TAF table instead of guessed at.
+            if (!_loggedAppliedArmor)
+            {
+                _loggedAppliedArmor = true;
+                Melon<TweaksAndFixes>.Logger.Msg(
+                    $"GG armor applied: {ShipLabel(shipHint)}, year={year:0}, state={_generateRandomShipState}, portion={portion:0.###}, " +
+                    $"belt={Inches(dict, Ship.A.Belt)}/{Inches(dict, Ship.A.BeltBow)}/{Inches(dict, Ship.A.BeltStern)}in, " +
+                    $"deck={Inches(dict, Ship.A.Deck)}/{Inches(dict, Ship.A.DeckBow)}/{Inches(dict, Ship.A.DeckStern)}in, " +
+                    $"turret={Inches(dict, Ship.A.TurretSide)}/{Inches(dict, Ship.A.TurretTop)}/{Inches(dict, Ship.A.Barbette)}in");
+            }
+
             return dict;
         }
 
@@ -126,6 +151,9 @@ namespace TweaksAndFixes
             {
                 if (!Patch_Ship.UseVanillaShipgenBaseline())
                     return;
+
+                if (__instance.__1__state == 0)
+                    _loggedAppliedArmor = false;
 
                 _generateRandomShipState = __instance.__1__state;
 

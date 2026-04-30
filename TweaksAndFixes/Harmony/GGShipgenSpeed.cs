@@ -1,75 +1,52 @@
 using HarmonyLib;
 using Il2Cpp;
+using MelonLoader;
 using UnityEngine;
 
 namespace TweaksAndFixes
 {
     internal static class GGShipgenSpeed
     {
+        private const float SmallCraftGlobalSpeedMinReductionKnots = 2f;
+
         private static int _generateRandomShipState = -1;
         private static Il2CppSystem.Random? _rnd;
+        private static readonly Dictionary<string, float> _originalSmallCraftSpeedMins = new();
 
         private static bool IsVanillaBaselineShipgen()
         {
             return Patch_Ship.UseVanillaShipgenBaseline() && _generateRandomShipState >= 0;
         }
 
-        private static float GetMinSpeed(Ship ship)
+        internal static void ApplyGlobalSmallCraftSpeedMinRelaxation(GameData gameData)
         {
-            float minSpeedKnots = Mathf.Clamp(GetMinSpeedMult(ship) * ship.hull.data.speedLimiter, ship.shipType.speedMin, ship.shipType.speedMax);
-            minSpeedKnots = Mathf.Max(GetAbsoluteMinSpeedKnots(ship), minSpeedKnots - GetMinSpeedRelaxationKnots(ship));
-            return minSpeedKnots * ShipM.KnotsToMS;
-        }
+            if (gameData?.shipTypes == null)
+                return;
 
-        private static float GetAbsoluteMinSpeedKnots(Ship ship)
-        {
-            return Mathf.Max(1f, ship.shipType.speedMin - GetMinSpeedRelaxationKnots(ship));
-        }
-
-        private static float GetMinSpeedRelaxationKnots(Ship ship)
-        {
-            string typeName = ship.shipType.name;
-            return typeName == "tb" || typeName == "dd" || typeName == "cl" ? 2f : 1f;
-        }
-
-        private static float GetMinSpeedMult(Ship ship)
-        {
-            float year = ship.GetYear(ship);
-            float mult;
-            float randFactor;
-            if (ship.shipType.name == "dd" || ship.shipType.name == "tb")
+            foreach (string shipTypeName in new[] { "dd" })
             {
-                mult = 0.925f;
-                randFactor = -0.027f;
-            }
-            else
-            {
-                switch (ship.hull.data.Generation)
+                if (!gameData.shipTypes.TryGetValue(shipTypeName, out ShipType shipType) || shipType == null)
+                    continue;
+
+                if (!_originalSmallCraftSpeedMins.TryGetValue(shipTypeName, out float originalSpeedMin))
                 {
-                    case 1:
-                        randFactor = -0.1f;
-                        mult = Util.Remap(year, 1890f, 1940f, 0.89f, 0.85f, true);
-                        break;
-                    case 2:
-                        randFactor = -0.105f;
-                        mult = Util.Remap(year, 1890f, 1940f, 0.836f, 0.855f, true);
-                        break;
-                    case 3:
-                        randFactor = -0.12f;
-                        mult = Util.Remap(year, 1890f, 1940f, 0.77f, 0.84f, true);
-                        break;
-                    default:
-                    case 4:
-                        randFactor = -0.13f;
-                        mult = Util.Remap(year, 1890f, 1940f, 0.76f, 0.85f, true);
-                        break;
+                    originalSpeedMin = shipType.speedMin;
+                    _originalSmallCraftSpeedMins[shipTypeName] = originalSpeedMin;
                 }
+
+                float relaxedSpeedMin = Mathf.Max(0f, originalSpeedMin - SmallCraftGlobalSpeedMinReductionKnots);
+                if (Mathf.Approximately(shipType.speedMin, relaxedSpeedMin))
+                    continue;
+
+                // Patch intent: treat DD minimum speed as a global rules tweak,
+                // not just a generator workaround. Early destroyer hulls need
+                // the extra displacement headroom in shipgen, and the designer
+                // UI should show the same lower legal minimum. Do not apply this
+                // to TBs: DIP data already lowers their class minimum heavily,
+                // while vanilla's TB generator speed is driven by hull speedLimiter.
+                shipType.speedMin = relaxedSpeedMin;
+                Melon<TweaksAndFixes>.Logger.Msg($"GG global ship type speed minimum: {shipTypeName.ToUpperInvariant()} {originalSpeedMin:0.#}kn -> {shipType.speedMin:0.#}kn");
             }
-
-            if (_rnd != null)
-                mult *= Util.Range(1f + randFactor, 1f, _rnd);
-
-            return mult;
         }
 
         private static float GetMaxSpeed(Ship ship)
@@ -93,17 +70,19 @@ namespace TweaksAndFixes
             if (ship == null || ship.hull?.data == null || ship.shipType == null || speedMax <= 0f)
                 return;
 
-            float minSpeed = GetMinSpeed(ship);
-            float maxSpeed = Mathf.Max(minSpeed, GetMaxSpeed(ship));
-            speedMax = Mathf.Clamp(speedMax, minSpeed, maxSpeed);
+            // Patch intent: only cap unrealistic high generated speeds. Early
+            // DD/TB hulls can become overweight when forced up to a class
+            // minimum speed, so keep vanilla's low-speed choices intact.
+            float maxSpeed = GetMaxSpeed(ship);
+            if (speedMax > maxSpeed)
+                speedMax = maxSpeed;
 
             float speedKnots = speedMax / ShipM.KnotsToMS;
-            float absoluteMinSpeedKnots = GetAbsoluteMinSpeedKnots(ship);
-            if (speedKnots < Mathf.Max(1f, absoluteMinSpeedKnots - 0.25f))
+            float wholeKnots = Mathf.Floor(speedKnots);
+            if (wholeKnots <= 0f)
                 return;
 
-            float wholeKnots = Mathf.Floor(speedKnots);
-            wholeKnots = Mathf.Clamp(wholeKnots, absoluteMinSpeedKnots, ship.shipType.speedMax);
+            wholeKnots = Mathf.Min(wholeKnots, ship.shipType.speedMax);
             speedMax = wholeKnots * ShipM.KnotsToMS;
         }
 
@@ -114,10 +93,11 @@ namespace TweaksAndFixes
             [HarmonyPrefix]
             internal static void Prefix(Ship __instance, ref float speedMax)
             {
-                // Patch intent: keep vanilla's speed selection/reduction flow, but constrain any
-                // generated ship speed to TAF's hull-aware min/max range, relax the enforced
-                // minimum by ship class, and normalize to whole knots. This copies the useful
-                // speed policy without porting TAF AdjustHullStats.
+                // Patch intent: keep vanilla's speed selection/reduction flow,
+                // but cap generated speeds to TAF's hull-aware maximum and
+                // normalize to whole knots. Do not enforce a minimum speed;
+                // weight-fragile early DD/TB hulls need the generator's lower
+                // speed choices to remain available.
                 if (!IsVanillaBaselineShipgen())
                     return;
 
@@ -148,6 +128,14 @@ namespace TweaksAndFixes
             [HarmonyPatch(nameof(Ship._GenerateRandomShip_d__573.MoveNext))]
             [HarmonyPostfix]
             internal static void Postfix()
+            {
+                _generateRandomShipState = -1;
+                _rnd = null;
+            }
+
+            [HarmonyPatch(nameof(Ship._GenerateRandomShip_d__573.MoveNext))]
+            [HarmonyFinalizer]
+            internal static void Finalizer()
             {
                 _generateRandomShipState = -1;
                 _rnd = null;

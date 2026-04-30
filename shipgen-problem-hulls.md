@@ -4,7 +4,7 @@ Working tracker for hulls that repeatedly fail, run slowly, or produce suspiciou
 
 Evidence source: `E:\SteamLibrary\steamapps\common\Ultimate Admiral Dreadnoughts\MelonLoader\Latest.log`
 
-Current observed build: `TAF-RC7_GG_Patch_gg154`
+Current observed build: `TAF-RC7_GG_Patch_gg192`
 
 ## Current Log Summary
 
@@ -20,6 +20,8 @@ Current observed build: `TAF-RC7_GG_Patch_gg154`
 
 | Ship type | Hull | Model | Nation | Year | Symptom | Evidence | Current note |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| DD | `dd_1` | `dd_s_hull` | Britain; USA; China | 1898 | Repeated early-DD failures; overweight with partial main-gun counts | Failures: Britain `27.1s` at `1009t/850t`, USA `27.4s` at `920t/850t`, Britain `21.4s` at `1843t/850t`, USA `27.0s` at `1193t/850t`, China `26.9s` at `1022t/850t`; repeated reasons include `main barrels`, `main turrets`, `barbette: weight` | Current working theory shifted from guns to speed/weight pressure. DD gun-inch clamp was reverted; speed patch now enforces max speed only and attempts are capped at 3. |
+| DD | `dd_1_german` | `dd_s_hull` | Germany | 1898 | Repeated early-DD failures; very overweight | Failure: `15.0s`, `attempts=4/4`, `1770t/783t`, repeated `main turrets 2/3`, `main barrels 2/4`, `barbette: weight` | Same mitigation track as `dd_1`: no DD gun clamp, no generated speed minimum, 3-attempt cap. |
 | BB | `b1_russiaold` | `brandenburg_hull_a` | Spain; Russia | 1892, 1893, 1895 | Failed once after 4 attempts; later succeeded | Failure: `49.1s`, `attempts=4/4`, `rejected=invalid parts=2`; repeated retries for `gun_main=0`; later successes in `10.2s` and `15.6s` | Intermittent. Watch gun placement and invalid-part cleanup rather than treating as always broken. |
 | BB | `bb_exp_iron2` | `inflex_hull_g` | Italy | 1892 | Hard main-gun failure | Failure: `13.8s`, `attempts=4/4`, `rejected=unmet reqs: gun_main=0 (1~-1)` | Real missing-main-gun problem. The partial turret/barrel bypass does not and should not hide this. |
 | CA | `ca_maine_threemast` | `maine_hull_i` | Spain; Greece | 1890, 1895 | Invalid parts once; later succeeded | Failure: `1.0s`, `attempts=1/1`, `rejected=invalid parts=2`, no randpart summary; later success in `12.3s` | Fast failure, but intermittent. Likely early invalid layout/state rather than expensive randpart churn. |
@@ -68,6 +70,7 @@ Latest pre-restart counts:
 ## Tuning Notes
 
 - Do not treat `gun_main=0` as the same issue as partial turret/barrel count failures. `gun_main=0` is still a real hard failure.
+- Early `dd_1` / `dd_1_german` failures in 1898 are dominated by final overweight/barbette checks. The first DD gun-inch cap experiment was reverted; current source preserves low generated speeds instead and limits the retry budget to 3.
 - The old partial main turret/barrel gate is not currently appearing in logs.
 - Main-gun randpart hard bans are currently disabled; suspicious recipes should remain visible unless we choose a targeted ban later.
 - Most expensive successful cases are dominated by `grs_gap_before_state_09_wait_update_parts` and `addparts_state_02_place_parts`.

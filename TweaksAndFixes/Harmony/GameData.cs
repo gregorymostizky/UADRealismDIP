@@ -100,6 +100,8 @@ namespace TweaksAndFixes
         internal static void Postfix_PostProcessAll(GameData __instance)
         {
             Debug.Log("Finished internal PostProcessAll");
+            GGShipgenSpeed.ApplyGlobalSmallCraftSpeedMinRelaxation(__instance);
+
             if (!Patch_Ship.ShouldBypassShipgenDataOverride("randParts"))
             {
                 foreach (var rp in __instance.randParts.Values)

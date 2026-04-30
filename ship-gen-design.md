@@ -525,10 +525,10 @@ Current patch tracker:
 | Post-parts turret armor sync | generated guns with turret armor entries | `GenerateRandomShip` state `11` (`validate_guns`) | Active, hardcoded |
 | Whole-inch gun caliber floor | generated guns | `Ship.SetCaliberDiameter(...)` during vanilla shipgen | Active, hardcoded |
 | Best generated components | generated ships | `GenerateRandomShip.MoveNext` while vanilla shipgen is active | Active, hardcoded |
-| Early TB main-battery clamp | pre-TB2 `tb_lowbow`/`tb_standard`/`tb_highbow` on `jap_tb_hull` | `Part.CanPlace(out string)` | Active, hardcoded |
-| Hull-aware speed clamp | all generated ship types | `Ship.SetSpeedMax(...)` during vanilla shipgen | Active, hardcoded |
-| Relaxed minimum speed floor | `tb`, `dd`, `cl` by `-2 kn`; all others by `-1 kn` | `Ship.SetSpeedMax(...)` during vanilla shipgen | Active, hardcoded |
+| Early TB gun-battery clamp | pre-TB2 `tb_lowbow`/`tb_standard`/`tb_highbow` on `jap_tb_hull` | `Part.CanPlace(out string)` | Active, hardcoded |
+| Hull-aware maximum speed cap | all generated ship types | `Ship.SetSpeedMax(...)` during vanilla shipgen | Active, hardcoded |
 | Whole-knot speed normalization | all generated ship types | `Ship.SetSpeedMax(...)` during vanilla shipgen | Active, hardcoded |
+| Shipgen attempt cap | all generated ship types | `GenerateRandomShip.MoveNext` | Active, hardcoded at 3 |
 
 Current standalone tweaks:
 
@@ -561,10 +561,10 @@ Current standalone tweaks:
 - TAF-style speed sanity on vanilla shipgen.
   - Hardcoded for now; no config param.
   - Lives in `TweaksAndFixes/Harmony/GGShipgenSpeed.cs` to keep speed experiments separate from armor and randpart tweaks.
-  - Copies the default TAF speed-range helpers, not the `speedMultByGen_*` param override layer.
+  - Copies the useful maximum-speed side of the default TAF speed helpers, not the `speedMultByGen_*` param override layer.
   - Prefix-patches `Ship.SetSpeedMax(...)` only while the vanilla-baseline generator is inside `GenerateRandomShip`.
-  - Clamps generated speeds to a hull-aware range based on `hull.data.speedLimiter`, hull generation, ship type min/max speed, ship year, and the vanilla shipgen coroutine RNG when available.
-  - Relaxes the enforced minimum speed after those calculations by `2 kn` for `tb`/`dd`/`cl` and by `1 kn` for all other ship types, with an absolute lower bound of `1 kn`.
+  - Caps generated speeds to a hull-aware maximum based on `hull.data.speedLimiter`, ship type max speed, ship year, and the vanilla shipgen coroutine RNG when available.
+  - Does not enforce any minimum speed. Early DD/TB hulls can become overweight when forced up to a class minimum, so low vanilla speed rolls are preserved.
   - Floors generated speeds to whole knots, matching the useful TAF normalization behavior.
   - Skips the clamp/normalization when a scenario supplies a custom shipgen speed.
   - This intentionally does not port TAF `AdjustHullStats` or its wider speed/range/crew/survivability balancing loop.
@@ -589,9 +589,16 @@ Current standalone tweaks:
   - Lives in `TweaksAndFixes/Harmony/GGShipgenTBGunClamp.cs` so this tiny-hull experiment is separate from the general gun component/caliber patch.
   - Prefixes the existing `Part.CanPlace(out string)` hook. This is intentionally a placement rejection, not a post-placement deletion.
   - Applies only in vanilla-baseline shipgen, only to ship type `tb`, and only to `tb_lowbow`, `tb_standard`, `tb_highbow`, or model `jap_tb_hull`.
-  - Blocks only a gun placement that would push total gun barrel-inches above `14` before the 500t TB tech (`hull_destroyer_2`) or above `18` once that tech is researched. The cap stops applying once the 700t TB tech (`hull_destroyer_3`) is researched.
+  - Blocks only a gun placement that would push total gun barrel-inches above `14` before the 500t TB tech (`hull_destroyer_2`) or above `18` once that tech is researched. The TB cap stops applying once the 700t TB tech (`hull_destroyer_3`) is researched.
   - The total is calculated as `sum(gun caliber inches * barrels)` across main and secondary guns.
   - This uses vanilla's normal `CanPlace=false` path so the generator can keep searching for a lighter battery instead of carrying an overweight layout into validation.
+
+- Shipgen attempt cap.
+  - Hardcoded for now; no config param.
+  - Lives in the active vanilla-baseline lifecycle hook in `TweaksAndFixes/Harmony/GGShipgenLifecycle.cs`.
+  - Caps vanilla shipgen attempts at `3` to prevent repeated doomed tiny-hull rolls from dominating a campaign turn.
+  - The earlier cap in `TweaksAndFixes/Harmony/Ship.cs` only affects the old TAF shipgen mutation path and does not run after vanilla-baseline mode returns early from that patch.
+  - This is intentionally a time budget control, not a design-quality rule.
 
 - Compact vanilla-baseline shipgen logging.
   - Hardcoded for now; no config param.

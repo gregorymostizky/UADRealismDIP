@@ -506,12 +506,22 @@ namespace TweaksAndFixes
 
         private void LoadTorpGrade(Ship.Store store)
         {
+            if (store == null)
+                return;
+
             TorpGradeFromStore(store, true);
             //Melon<TweaksAndFixes>.Logger.Msg($"Loaded torpedo grade {_torpedoGrade}");
         }
 
         private void SaveTorpGrade(Ship.Store store)
         {
+            // Patch intent: battle prep can serialize temporary/generated ships
+            // before their TAF component has a fully initialized Ship/parts graph.
+            // Torpedo grade data is optional, so skip it instead of interrupting
+            // Ship.ToStore and leaving battle visual restore in a bad state.
+            if (store == null || _ship == null || _ship.parts == null)
+                return;
+
             PartData torpData = null;
             foreach (var p in _ship.parts)
             {

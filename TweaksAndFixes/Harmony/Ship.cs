@@ -5038,11 +5038,11 @@ namespace TweaksAndFixes
             if (!Config.ShipGenTweaks || __instance == null)
                 return;
 
-            int maxAttempts = Config.Param("taf_shipgen_max_attempts", 20);
-            if (maxAttempts <= 0)
-                return;
-
-            __instance._triesTotal_5__4 = Math.Min(__instance._triesTotal_5__4, Math.Max(1, maxAttempts));
+            // Patch intent: keep failed tiny-hull searches from dominating a
+            // campaign turn. Three tries still lets vanilla recover from one
+            // bad roll without spending 20+ seconds on repeated dead ends.
+            const int MaxAttempts = 3;
+            __instance._triesTotal_5__4 = Math.Min(__instance._triesTotal_5__4, MaxAttempts);
         }
 
         private static void PrintShipgenFinalSummary(Ship ship)
@@ -5518,6 +5518,13 @@ namespace TweaksAndFixes
         [HarmonyPatch(nameof(VesselEntity.FromBaseStore))]
         internal static void Prefix_FromBaseStore(VesselEntity __instance, VesselEntity.VesselEntityStore store, bool isSharedDesign)
         {
+            // Patch intent: battle setup may restore temporary/generated vessels
+            // through FromBaseStore with incomplete store/game-data state. The
+            // extra TAF data is optional, so leave vanilla restore alone when the
+            // hook cannot safely read the ship store.
+            if (__instance == null || store == null)
+                return;
+
             Ship ship = __instance.GetComponent<Ship>();
             if (ship == null)
                 return;
@@ -5526,7 +5533,7 @@ namespace TweaksAndFixes
             if (sStore == null)
                 return;
 
-            if (sStore.mission != null && LoadSave.Get(sStore.mission, G.GameData.missions) == null)
+            if (sStore.mission != null && G.GameData?.missions != null && LoadSave.Get(sStore.mission, G.GameData.missions) == null)
                 return;
 
             Patch_Ship._IsLoading = true;

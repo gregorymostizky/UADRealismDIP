@@ -172,11 +172,11 @@ namespace TweaksAndFixes
                     float t = Mathf.InverseLerp(a.year, b.year, year);
 
                     foreach (var key in a.min.Keys)
-                        _min[key] = Mathf.Lerp(a.min[key], b.min[key], year);
+                        _min[key] = Mathf.Lerp(a.min[key], b.min[key], t);
                     foreach (var key in a.max.Keys)
-                        _max[key] = Mathf.Lerp(a.max[key], b.max[key], year);
-                    _citadelMult = Mathf.Lerp(a.citadelMult, b.citadelMult, year);
-                    _foreAftVariation = Mathf.Lerp(a.foreAftVariation, b.foreAftVariation, year);
+                        _max[key] = Mathf.Lerp(a.max[key], b.max[key], t);
+                    _citadelMult = Mathf.Lerp(a.citadelMult, b.citadelMult, t);
+                    _foreAftVariation = Mathf.Lerp(a.foreAftVariation, b.foreAftVariation, t);
                 }
                 else
                 {
@@ -321,6 +321,7 @@ namespace TweaksAndFixes
             private bool SyncTurretArmorFromCurrent(Ship ship)
             {
                 bool didChange = false;
+                bool allowBelowZoneMin = _lastLerpVal < 0f;
                 Ship.TurretArmor mainGun = null;
                 if (ship.shipTurretArmor != null && ship.shipTurretArmor.Count > 0)
                 {
@@ -340,21 +341,21 @@ namespace TweaksAndFixes
                 {
                     Ship.A area = Ship.A.TurretSide;
                     float mult = GetTurretArmorMultiplier(ship, area, ta.turretPartData, mainGun);
-                    float nVal = G.settings.RoundToArmorStep(Mathf.Clamp(_current[area] * mult, ship.MinArmorForZone(area), ship.MaxArmorForZone(area, ta.turretPartData)));
+                    float nVal = G.settings.RoundToArmorStep(Mathf.Clamp(_current[area] * mult, ArmorFloor(ship, area, allowBelowZoneMin), ship.MaxArmorForZone(area, ta.turretPartData)));
                     if (nVal != ta.sideTurretArmor)
                         didChange = true;
                     ta.sideTurretArmor = nVal;
 
                     area = Ship.A.TurretTop;
                     mult = GetTurretArmorMultiplier(ship, area, ta.turretPartData, mainGun);
-                    nVal = G.settings.RoundToArmorStep(Mathf.Clamp(_current[area] * mult, ship.MinArmorForZone(area), ship.MaxArmorForZone(area, ta.turretPartData)));
+                    nVal = G.settings.RoundToArmorStep(Mathf.Clamp(_current[area] * mult, ArmorFloor(ship, area, allowBelowZoneMin), ship.MaxArmorForZone(area, ta.turretPartData)));
                     if (nVal != ta.topTurretArmor)
                         didChange = true;
                     ta.topTurretArmor = nVal;
 
                     area = Ship.A.Barbette;
                     mult = GetTurretArmorMultiplier(ship, area, ta.turretPartData, mainGun);
-                    nVal = G.settings.RoundToArmorStep(Mathf.Clamp(_current[area] * mult, ship.MinArmorForZone(area), ship.MaxArmorForZone(area, ta.turretPartData)));
+                    nVal = G.settings.RoundToArmorStep(Mathf.Clamp(_current[area] * mult, ArmorFloor(ship, area, allowBelowZoneMin), ship.MaxArmorForZone(area, ta.turretPartData)));
                     if (nVal != ta.barbetteArmor)
                         didChange = true;
                     ta.barbetteArmor = nVal;
@@ -415,24 +416,28 @@ namespace TweaksAndFixes
 
             private static readonly Ship.A[] _Extendeds = new Ship.A[] { Ship.A.BeltBow, Ship.A.BeltStern, Ship.A.DeckBow, Ship.A.DeckStern };
 
+            private static float ArmorFloor(Ship ship, Ship.A area, bool allowBelowZoneMin)
+                => allowBelowZoneMin ? 0f : ship.MinArmorForZone(area);
+
             private void UpdateForLerp(Ship ship, float t)
             {
                 _lastLerpVal = t;
+                bool allowBelowZoneMin = t < 0f;
 
                 foreach (var a in _max.Keys)
-                    _current[a] = Mathf.Lerp(_min[a], _max[a], t);
+                    _current[a] = Mathf.LerpUnclamped(_min[a], _max[a], t);
 
                 if (_foreAftVariation != 0f)
                 {
                     foreach (var a in _Extendeds)
                     {
                         float mult = (int)a % 2 == 0 ? -1f : 1f;
-                        _current[a] = Mathf.Clamp(_current[a] * (1f + mult * _foreAftVariation), _min[a], _max[a]);
+                        _current[a] = Mathf.Clamp(_current[a] * (1f + mult * _foreAftVariation), allowBelowZoneMin ? 0f : _min[a], _max[a]);
                     }
                 }
 
                 foreach (var area in _max.Keys)
-                    _current[area] = G.settings.RoundToArmorStep(Mathf.Clamp(_current[area], ship.MinArmorForZone(area), ship.MaxArmorForZone(area)));
+                    _current[area] = G.settings.RoundToArmorStep(Mathf.Clamp(_current[area], ArmorFloor(ship, area, allowBelowZoneMin), ship.MaxArmorForZone(area)));
             }
         }
 
