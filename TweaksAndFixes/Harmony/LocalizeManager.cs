@@ -78,6 +78,80 @@ namespace TweaksAndFixes
             typeof(string),
             typeof(Il2CppReferenceArray<Il2CppSystem.Object>)
         })]
+        internal static bool Prefix_LocalizeCampaignShipCounts(string tag, Il2CppReferenceArray<Il2CppSystem.Object> p, ref string __result)
+        {
+            if (p == null || GameManager.Instance == null || !GameManager.IsWorldMap)
+                return true;
+
+            int commissioning = CountMainPlayerCommissioningShips();
+            if (commissioning < 0)
+                return true;
+
+            // Patch intent: expose commissioning ships in the campaign status summaries. Vanilla
+            // advances commissioning separately from construction, but the right-side world-map
+            // panel only shows active/building/repair/refit counts.
+            if (tag == "$Ui_World_MapWindow_Building0shipsDP" && p.Length >= 1)
+            {
+                __result = $"Building {ArgString(p, 0)} ships, commissioning {commissioning}:";
+                return false;
+            }
+
+            if (tag == "$Ui_World_Finances_ShipsActiveBuildingRepairingRefit" && p.Length >= 6)
+            {
+                string colorOpen = ArgString(p, 4);
+                string colorClose = ArgString(p, 5);
+                __result = $"{colorOpen}{ArgString(p, 0)}{colorClose} ships active ({colorOpen}{ArgString(p, 1)}{colorClose} building, {colorOpen}{commissioning}{colorClose} commissioning, {colorOpen}{ArgString(p, 2)}{colorClose} repairing, {colorOpen}{ArgString(p, 3)}{colorClose} refit)";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static int CountMainPlayerCommissioningShips()
+        {
+            try
+            {
+                Player player = ExtraGameData.MainPlayer();
+                if (player == null)
+                    return -1;
+
+                int count = 0;
+                foreach (Ship ship in player.GetFleetAll())
+                {
+                    if (ship != null && !ship.isDesign && ship.isCommissioning)
+                        count++;
+                }
+
+                return count;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+
+        private static string ArgString(Il2CppReferenceArray<Il2CppSystem.Object> p, int index)
+        {
+            try
+            {
+                if (p == null || index < 0 || index >= p.Length || p[index] == null)
+                    return string.Empty;
+
+                return p[index].ToString();
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(LocalizeManager))]
+        [HarmonyPatch("Localize", new Type[]
+        {
+            typeof(string),
+            typeof(Il2CppReferenceArray<Il2CppSystem.Object>)
+        })]
         internal static void FixLocalize(ref string tag, Il2CppReferenceArray<Il2CppSystem.Object> p)
         {
             if (tag == "$tooltip_campaign_new_game_fleet_creation" &&
